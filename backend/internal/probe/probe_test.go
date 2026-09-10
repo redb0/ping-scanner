@@ -54,6 +54,13 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+func TestProbe_invalidURL(t *testing.T) {
+	got := Probe(Target("http://[::1]:namedport"))
+	assert.Equal(t, Down, got.Outcome)
+	assert.Equal(t, 0, got.StatusCode)
+	assert.Error(t, got.Err)
+}
+
 func TestProbe_refused(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
