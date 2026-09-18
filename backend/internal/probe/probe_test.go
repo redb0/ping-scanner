@@ -87,6 +87,18 @@ func TestProbe_redirect(t *testing.T) {
 	assert.Equal(t, http.StatusOK, got.StatusCode)
 }
 
+func TestProbe_timeout(t *testing.T) {
+	target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+
+	got := Probe(target)
+
+	assert.Equal(t, Down, got.Outcome)
+	assert.Equal(t, 0, got.StatusCode)
+	assert.Equal(t, "timeout", got.Reason())
+}
+
 func TestProbe_bodyNotDownloaded(t *testing.T) {
 	hold := make(chan struct{})
 	target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -102,4 +114,20 @@ func TestProbe_bodyNotDownloaded(t *testing.T) {
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
 	assert.Equal(t, http.StatusOK, got.StatusCode)
+}
+
+func TestOutcome_String(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome Outcome
+		want    string
+	}{
+		{name: "Up", outcome: Up, want: "Up"},
+		{name: "Down", outcome: Down, want: "Down"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, test.outcome.String())
+		})
+	}
 }
