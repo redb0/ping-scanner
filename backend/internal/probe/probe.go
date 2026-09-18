@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 const userAgent = "probe/1.0"
@@ -13,6 +14,13 @@ const (
 	Down Outcome = iota
 	Up
 )
+
+func (o Outcome) String() string {
+	if o == Up {
+		return "Up"
+	}
+	return "Down"
+}
 
 // Result — исход одной Probe.
 type Result struct {
@@ -25,8 +33,10 @@ func (r Result) Reason() string {
 	return clipReason(reason(r.Err))
 }
 
+const clientTimeout = 5 * time.Second
+
 // Следует редиректам (до 10).
-var client = &http.Client{}
+var client = &http.Client{Timeout: clientTimeout}
 
 func Probe(target Target) Result {
 	result := Result{Outcome: Down}

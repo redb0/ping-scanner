@@ -87,6 +87,18 @@ func TestProbe_redirect(t *testing.T) {
 	assert.Equal(t, http.StatusOK, got.StatusCode)
 }
 
+func TestProbe_timeout(t *testing.T) {
+	target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+
+	got := Probe(target)
+
+	assert.Equal(t, Down, got.Outcome)
+	assert.Equal(t, 0, got.StatusCode)
+	assert.Equal(t, "timeout", got.Reason())
+}
+
 func TestProbe_bodyNotDownloaded(t *testing.T) {
 	hold := make(chan struct{})
 	target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
