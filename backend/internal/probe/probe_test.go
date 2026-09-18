@@ -115,3 +115,19 @@ func TestProbe_bodyNotDownloaded(t *testing.T) {
 	assert.Equal(t, Up, got.Outcome)
 	assert.Equal(t, http.StatusOK, got.StatusCode)
 }
+
+func TestOutcome_String(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome Outcome
+		want    string
+	}{
+		{name: "Up", outcome: Up, want: "Up"},
+		{name: "Down", outcome: Down, want: "Down"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, test.outcome.String())
+		})
+	}
+}
