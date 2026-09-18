@@ -21,6 +21,10 @@ type Result struct {
 	Err        error // сырая ошибка; nil, если ответ получен
 }
 
+func (r Result) Reason() string {
+	return clipReason(reason(r.Err))
+}
+
 // Следует редиректам (до 10).
 var client = &http.Client{}
 
