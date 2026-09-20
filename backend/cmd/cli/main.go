@@ -41,7 +41,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func formatLine(target probe.Target, result probe.Result) string {
-	line := fmt.Sprintf("%s %s %d", target, result.Outcome, result.StatusCode)
+	line := fmt.Sprintf(
+		"%s %s %d %d",
+		target,
+		result.Outcome,
+		result.StatusCode,
+		result.Latency.Milliseconds(),
+	)
 	if result.Outcome == probe.Down {
 		if reason := result.Reason(); reason != "" {
 			return line + " " + reason

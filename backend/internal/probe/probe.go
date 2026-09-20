@@ -27,6 +27,7 @@ type Result struct {
 	Outcome    Outcome
 	StatusCode int   // финальный HTTP-код после редиректов; 0, если ответа нет
 	Err        error // сырая ошибка; nil, если ответ получен
+	Latency    time.Duration
 }
 
 func (r Result) Reason() string {
@@ -39,6 +40,13 @@ const clientTimeout = 5 * time.Second
 var client = &http.Client{Timeout: clientTimeout}
 
 func Probe(target Target) Result {
+	start := time.Now()
+	result := httpGet(target)
+	result.Latency = time.Since(start)
+	return result
+}
+
+func httpGet(target Target) Result {
 	result := Result{Outcome: Down}
 
 	ctx, cancel := context.WithCancel(context.Background())
