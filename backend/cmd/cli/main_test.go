@@ -2,11 +2,12 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,16 +24,24 @@ func startCLIServer(t *testing.T, status int) string {
 	return srv.URL
 }
 
+func stdoutLine(target, outcome, status, reason string) string {
+	line := regexp.QuoteMeta(target) + " " + outcome + " " + status + ` \d+`
+	if reason != "" {
+		line += " " + regexp.QuoteMeta(reason)
+	}
+	return line + `\n`
+}
+
 func TestRun(t *testing.T) {
 	up := startCLIServer(t, http.StatusOK)
 	down := startCLIServer(t, http.StatusInternalServerError)
 
 	tests := []struct {
-		name       string
-		args       []string
-		wantCode   int
-		wantStdout string
-		wantStderr string
+		name          string
+		args          []string
+		wantCode      int
+		stdoutPattern string
+		wantStderr    string
 	}{
 		{
 			name:     "no targets",
@@ -46,29 +55,28 @@ func TestRun(t *testing.T) {
 			wantStderr: "skipped 1 invalid target(s)\n",
 		},
 		{
-			name:       "fail-fast",
-			args:       []string{"--fail-fast", "ftp://x.io", up},
-			wantCode:   int(probe.ExitUsage),
-			wantStdout: "",
+			name:     "fail-fast",
+			args:     []string{"--fail-fast", "ftp://x.io", up},
+			wantCode: int(probe.ExitUsage),
 		},
 		{
-			name:       "all up",
-			args:       []string{up},
-			wantCode:   int(probe.ExitOK),
-			wantStdout: up + " Up 200\n",
+			name:          "all up",
+			args:          []string{up},
+			wantCode:      int(probe.ExitOK),
+			stdoutPattern: stdoutLine(up, "Up", "200", ""),
 		},
 		{
-			name:       "at least one down",
-			args:       []string{up, down},
-			wantCode:   int(probe.ExitDown),
-			wantStdout: fmt.Sprintf("%s Up 200\n%s Down 500\n", up, down),
+			name:          "at least one down",
+			args:          []string{up, down},
+			wantCode:      int(probe.ExitDown),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", ""),
 		},
 		{
-			name:       "skip does not force usage exit",
-			args:       []string{"ftp://x.io", up},
-			wantCode:   int(probe.ExitOK),
-			wantStdout: up + " Up 200\n",
-			wantStderr: "skipped 1 invalid target(s)\n",
+			name:          "skip does not force usage exit",
+			args:          []string{"ftp://x.io", up},
+			wantCode:      int(probe.ExitOK),
+			stdoutPattern: stdoutLine(up, "Up", "200", ""),
+			wantStderr:    "skipped 1 invalid target(s)\n",
 		},
 	}
 	for _, test := range tests {
@@ -76,7 +84,7 @@ func TestRun(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			got := run(test.args, &stdout, &stderr)
 			assert.Equal(t, test.wantCode, got)
-			assert.Equal(t, test.wantStdout, stdout.String())
+			assert.Regexp(t, "^"+test.stdoutPattern+"$", stdout.String())
 			assert.Equal(t, test.wantStderr, stderr.String())
 		})
 	}
@@ -93,7 +101,7 @@ func TestRun_connectionRefused(t *testing.T) {
 	got := run([]string{raw}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitDown), got)
-	assert.Equal(t, raw+" Down 0 connection refused\n", stdout.String())
+	assert.Regexp(t, "^"+stdoutLine(raw, "Down", "0", "connection refused")+"$", stdout.String())
 	assert.Empty(t, stderr.String())
 }
 
@@ -103,4 +111,13 @@ func TestRun_unknownFlag(t *testing.T) {
 	assert.Equal(t, int(probe.ExitUsage), got)
 	assert.Empty(t, stdout.String())
 	assert.NotEmpty(t, stderr.String())
+}
+
+func TestFormatLine(t *testing.T) {
+	got := formatLine("https://x.io", probe.Result{
+		Outcome:    probe.Up,
+		StatusCode: http.StatusOK,
+		Latency:    42 * time.Millisecond,
+	})
+	assert.Equal(t, "https://x.io Up 200 42", got)
 }

@@ -1,6 +1,7 @@
 # Ping Scanner
 
 [![CI](https://github.com/redb0/ping-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/redb0/ping-scanner/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/redb0/ping-scanner/graph/badge.svg?token=PE5uDpx4pU)](https://codecov.io/gh/redb0/ping-scanner)
 
 CLI, который берёт набор веб-целей, делает по каждой HTTP пробу и показывает
 статус по каждой из них.
@@ -38,6 +39,7 @@ CLI, который берёт набор веб-целей, делает по �
 - Up — финальный статус `< 500` (4xx тоже Up); Down — 5xx или нет ответа
 - для сетевых сбоев печатается reason: `timeout`, `DNS: …`,
   `connection refused`, `TLS: …`
+- для каждой цели печатается время ответа в ms
 - жёсткий таймаут клиента 5s, без флага на цель
 
 Ещё нет: ввод из файла, параллелизм, `--timeout`, `--json`, цветная таблица,
@@ -68,8 +70,8 @@ go build -o ping-scanner ./cmd/cli
 Пример строки:
 
 ```text
-https://example.com Up 200
-https://x.io Down 0 timeout
+https://example.com Up 200 42
+https://x.io Down 0 5003 timeout
 ```
 
 Невалидный аргумент без `--fail-fast` не валит весь прогон:
@@ -93,10 +95,11 @@ https://x.io Down 0 timeout
 Одна строка на Target, в порядке аргументов:
 
 ```text
-<target> <Up|Down> <status> [reason]
+<target> <Up|Down> <status> <ms> [reason]
 ```
 
 `status` — финальный HTTP-код после редиректов, либо `0`, если ответа не было.
+`ms` — время ответа Probe в миллисекундах.
 `reason` только у Down с сетевой ошибкой; у 5xx колонка пустая.
 
 ## Коды завершения
@@ -112,8 +115,9 @@ https://x.io Down 0 timeout
 
 ## Как это устроено
 
-Probe — один GET. Scan — проход по всему набору, сейчас строго по очереди.
-Классификация Up/Down, таймаут и exit-код живут в `backend/internal/probe`.
+Probe — один GET, меряет latency. Scan — проход по всему набору, сейчас строго
+по очереди. Классификация Up/Down, таймаут, latency и exit-код живут в
+`backend/internal/probe`.
 CLI только парсит флаги, печатает строки. Так задумано в ADR-0001: следующий
 транспорт (HTTP API) не должен заново собирать эти правила.
 
