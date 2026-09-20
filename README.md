@@ -1,6 +1,7 @@
 # Ping Scanner
 
 [![CI](https://github.com/redb0/ping-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/redb0/ping-scanner/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/redb0/ping-scanner/graph/badge.svg?token=PE5uDpx4pU)](https://codecov.io/gh/redb0/ping-scanner)
 
 CLI, который берёт набор веб-целей, делает по каждой HTTP пробу и показывает
 статус по каждой из них.
