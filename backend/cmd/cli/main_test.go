@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -26,6 +28,13 @@ func startCLIServer(t *testing.T, status int) string {
 	return srv.URL
 }
 
+func writeTargets(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+	return path
+}
+
 func stdoutLine(target, outcome, status, reason string) string {
 	line := regexp.QuoteMeta(target) + " " + outcome + " " + status + ` \d+`
 	if reason != "" {
@@ -41,6 +50,11 @@ func stdoutSummary(up, down int) string {
 func TestRun(t *testing.T) {
 	up := startCLIServer(t, http.StatusOK)
 	down := startCLIServer(t, http.StatusInternalServerError)
+	fromFile := writeTargets(t, "# comment\n\n"+up+"\n")
+	invalidInFile := writeTargets(t, "ftp://x.io\n")
+	mergeFile := writeTargets(t, up+"\n")
+	failFastFile := writeTargets(t, "ftp://x.io\n"+up+"\n")
+	missing := filepath.Join(t.TempDir(), "missing.txt")
 
 	tests := []struct {
 		name          string
@@ -83,6 +97,42 @@ func TestRun(t *testing.T) {
 			wantCode:      int(probe.ExitOK),
 			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutSummary(1, 0),
 			wantStderr:    "skipped 1 invalid target(s)\n",
+		},
+		{
+			name:          "file targets",
+			args:          []string{"-f", fromFile},
+			wantCode:      int(probe.ExitOK),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutSummary(1, 0),
+		},
+		{
+			name:          "invalid file line is skipped",
+			args:          []string{"-f", invalidInFile, up},
+			wantCode:      int(probe.ExitOK),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutSummary(1, 0),
+			wantStderr:    "skipped 1 invalid target(s)\n",
+		},
+		{
+			name:          "file and args merge",
+			args:          []string{"-f", mergeFile, down},
+			wantCode:      int(probe.ExitDown),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", "") + stdoutSummary(1, 1),
+		},
+		{
+			name:          "dedup file and args",
+			args:          []string{"-f", mergeFile, down, up},
+			wantCode:      int(probe.ExitDown),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", "") + stdoutSummary(1, 1),
+		},
+		{
+			name:     "fail-fast on file line",
+			args:     []string{"--fail-fast", "-f", failFastFile},
+			wantCode: int(probe.ExitUsage),
+		},
+		{
+			name:       "missing file",
+			args:       []string{"-f", missing, up},
+			wantCode:   int(probe.ExitUsage),
+			wantStderr: "open " + missing + ": no such file or directory\n",
 		},
 	}
 	for _, test := range tests {
