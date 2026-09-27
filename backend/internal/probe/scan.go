@@ -8,10 +8,11 @@ const (
 	ExitUsage ExitCode = 2
 )
 
-func Scan(targets []Target) []Result {
+func Scan(targets []Target, insecure bool) []Result {
+	client := httpClient(insecure)
 	results := make([]Result, len(targets))
 	for i, target := range targets {
-		results[i] = Probe(target)
+		results[i] = Probe(target, client)
 	}
 	return results
 }

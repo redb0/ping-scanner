@@ -2,9 +2,13 @@ package probe
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"ping-scanner/internal/tlstest"
 )
 
 func TestScan(t *testing.T) {
@@ -58,7 +62,7 @@ func TestScan(t *testing.T) {
 				})
 			}
 
-			got := Scan(targets)
+			got := Scan(targets, false)
 
 			outcomes := make([]Outcome, len(got))
 			for i, result := range got {
@@ -67,6 +71,28 @@ func TestScan(t *testing.T) {
 			assert.Equal(t, test.want, outcomes)
 		})
 	}
+}
+
+func TestScan_selfSigned(t *testing.T) {
+	srv := tlstest.Server(t)
+
+	got := Scan([]Target{Target(srv.URL)}, false)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, Down, got[0].Outcome)
+	assert.Equal(t, 0, got[0].StatusCode)
+	assert.True(t, strings.HasPrefix(got[0].Reason(), "TLS:"))
+}
+
+func TestScan_insecureSelfSigned(t *testing.T) {
+	srv := tlstest.Server(t)
+
+	got := Scan([]Target{Target(srv.URL)}, true)
+
+	require.Len(t, got, 1)
+	require.NoError(t, got[0].Err)
+	assert.Equal(t, Up, got[0].Outcome)
+	assert.Equal(t, http.StatusOK, got[0].StatusCode)
 }
 
 func TestExit(t *testing.T) {

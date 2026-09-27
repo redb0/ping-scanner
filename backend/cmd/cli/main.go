@@ -17,6 +17,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ping-scanner", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	failFast := fs.Bool("fail-fast", false, "stop on first invalid target")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	if err := fs.Parse(args); err != nil {
 		return int(probe.ExitUsage)
 	}
@@ -31,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return int(probe.ExitUsage)
 	}
 
-	results := probe.Scan(targets)
+	results := probe.Scan(targets, *insecure)
 	for i, result := range results {
 		if _, err := fmt.Fprintln(stdout, formatLine(targets[i], result)); err != nil {
 			return int(probe.ExitUsage)

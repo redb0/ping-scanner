@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"crypto/x509"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"ping-scanner/internal/tlstest"
 )
 
 func startServer(t *testing.T, handler http.HandlerFunc) Target {
@@ -16,6 +19,12 @@ func startServer(t *testing.T, handler http.HandlerFunc) Target {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return Target(srv.URL)
+}
+
+func trustedClient(cert *x509.Certificate) *http.Client {
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return httpClientWithRoots(false, pool)
 }
 
 func TestProbe(t *testing.T) {
@@ -46,7 +55,7 @@ func TestProbe(t *testing.T) {
 				assert.Equal(t, http.MethodGet, r.Method)
 				assert.Equal(t, userAgent, r.UserAgent())
 				w.WriteHeader(test.status)
-			}))
+			}), httpClient(false))
 
 			require.NoError(t, got.Err)
 			assert.Equal(t, test.wantOutcome, got.Outcome)
@@ -56,7 +65,7 @@ func TestProbe(t *testing.T) {
 }
 
 func TestProbe_invalidURL(t *testing.T) {
-	got := Probe(Target("http://[::1]:namedport"))
+	got := Probe(Target("http://[::1]:namedport"), httpClient(false))
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
 	assert.Error(t, got.Err)
@@ -68,7 +77,7 @@ func TestProbe_refused(t *testing.T) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	got := Probe(Target("http://" + addr))
+	got := Probe(Target("http://"+addr), httpClient(false))
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
 	assert.Error(t, got.Err)
@@ -83,7 +92,7 @@ func TestProbe_redirect(t *testing.T) {
 			return
 		}
 		http.Redirect(w, r, "/up", http.StatusFound)
-	}))
+	}), httpClient(false))
 
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
@@ -95,7 +104,7 @@ func TestProbe_timeout(t *testing.T) {
 		<-r.Context().Done()
 	})
 
-	got := Probe(target)
+	got := Probe(target, httpClient(false))
 
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
@@ -113,7 +122,7 @@ func TestProbe_bodyNotDownloaded(t *testing.T) {
 	})
 	t.Cleanup(func() { close(hold) })
 
-	got := Probe(target)
+	got := Probe(target, httpClient(false))
 
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
@@ -128,7 +137,18 @@ func TestProbe_latencySlowGreaterThanFast(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	})
-	assert.Greater(t, Probe(slow).Latency, Probe(fast).Latency)
+	client := httpClient(false)
+	assert.Greater(t, Probe(slow, client).Latency, Probe(fast, client).Latency)
+}
+
+func TestProbe_trustedCertificate(t *testing.T) {
+	srv := tlstest.Server(t)
+
+	got := Probe(Target(srv.URL), trustedClient(srv.Certificate()))
+
+	require.NoError(t, got.Err)
+	assert.Equal(t, Up, got.Outcome)
+	assert.Equal(t, http.StatusOK, got.StatusCode)
 }
 
 func TestOutcome_String(t *testing.T) {

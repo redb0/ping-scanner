@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"ping-scanner/internal/probe"
+	"ping-scanner/internal/tlstest"
 )
 
 func startCLIServer(t *testing.T, status int) string {
@@ -102,6 +103,17 @@ func TestRun_connectionRefused(t *testing.T) {
 
 	assert.Equal(t, int(probe.ExitDown), got)
 	assert.Regexp(t, "^"+stdoutLine(raw, "Down", "0", "connection refused")+"$", stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestRun_insecure(t *testing.T) {
+	srv := tlstest.Server(t)
+
+	var stdout, stderr bytes.Buffer
+	got := run([]string{"--insecure", srv.URL}, &stdout, &stderr)
+
+	assert.Equal(t, int(probe.ExitOK), got)
+	assert.Regexp(t, "^"+stdoutLine(srv.URL, "Up", "200", "")+"$", stdout.String())
 	assert.Empty(t, stderr.String())
 }
 

@@ -2,6 +2,8 @@ package probe
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"time"
 )
@@ -36,17 +38,14 @@ func (r Result) Reason() string {
 
 const clientTimeout = 5 * time.Second
 
-// Следует редиректам (до 10).
-var client = &http.Client{Timeout: clientTimeout}
-
-func Probe(target Target) Result {
+func Probe(target Target, client *http.Client) Result {
 	start := time.Now()
-	result := httpGet(target)
+	result := httpGet(target, client)
 	result.Latency = time.Since(start)
 	return result
 }
 
-func httpGet(target Target) Result {
+func httpGet(target Target, client *http.Client) Result {
 	result := Result{Outcome: Down}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,4 +71,18 @@ func httpGet(target Target) Result {
 		result.Outcome = Up
 	}
 	return result
+}
+
+func httpClient(insecure bool) *http.Client {
+	return httpClientWithRoots(insecure, nil)
+}
+
+func httpClientWithRoots(insecure bool, roots *x509.CertPool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: insecure,
+		RootCAs:            roots,
+	}
+	// Следует редиректам (до 10).
+	return &http.Client{Timeout: clientTimeout, Transport: transport}
 }
