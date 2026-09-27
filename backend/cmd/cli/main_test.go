@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,10 @@ func stdoutLine(target, outcome, status, reason string) string {
 		line += " " + regexp.QuoteMeta(reason)
 	}
 	return line + `\n`
+}
+
+func stdoutSummary(up, down int) string {
+	return regexp.QuoteMeta(fmt.Sprintf("%d up, %d down, %d total\n", up, down, up+down))
 }
 
 func TestRun(t *testing.T) {
@@ -64,19 +69,19 @@ func TestRun(t *testing.T) {
 			name:          "all up",
 			args:          []string{up},
 			wantCode:      int(probe.ExitOK),
-			stdoutPattern: stdoutLine(up, "Up", "200", ""),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutSummary(1, 0),
 		},
 		{
 			name:          "at least one down",
 			args:          []string{up, down},
 			wantCode:      int(probe.ExitDown),
-			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", ""),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", "") + stdoutSummary(1, 1),
 		},
 		{
 			name:          "skip does not force usage exit",
 			args:          []string{"ftp://x.io", up},
 			wantCode:      int(probe.ExitOK),
-			stdoutPattern: stdoutLine(up, "Up", "200", ""),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutSummary(1, 0),
 			wantStderr:    "skipped 1 invalid target(s)\n",
 		},
 	}
@@ -102,7 +107,7 @@ func TestRun_connectionRefused(t *testing.T) {
 	got := run([]string{raw}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitDown), got)
-	assert.Regexp(t, "^"+stdoutLine(raw, "Down", "0", "connection refused")+"$", stdout.String())
+	assert.Regexp(t, "^"+stdoutLine(raw, "Down", "0", "connection refused")+stdoutSummary(0, 1)+"$", stdout.String())
 	assert.Empty(t, stderr.String())
 }
 
@@ -113,7 +118,7 @@ func TestRun_insecure(t *testing.T) {
 	got := run([]string{"--insecure", srv.URL}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitOK), got)
-	assert.Regexp(t, "^"+stdoutLine(srv.URL, "Up", "200", "")+"$", stdout.String())
+	assert.Regexp(t, "^"+stdoutLine(srv.URL, "Up", "200", "")+stdoutSummary(1, 0)+"$", stdout.String())
 	assert.Empty(t, stderr.String())
 }
 

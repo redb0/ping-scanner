@@ -38,6 +38,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return int(probe.ExitUsage)
 		}
 	}
+
+	summary := probe.Summarize(results)
+	if len(results) > 0 {
+		if _, err := fmt.Fprintln(stdout, summary.String()); err != nil {
+			return int(probe.ExitUsage)
+		}
+	}
+
 	return int(probe.Exit(results))
 }
 

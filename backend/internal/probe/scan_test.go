@@ -116,3 +116,46 @@ func TestExit(t *testing.T) {
 		})
 	}
 }
+
+func TestSummarize(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []Result
+		want    Summary
+	}{
+		{name: "no results", results: []Result{}, want: Summary{Up: 0, Down: 0}},
+		{name: "one Up", results: []Result{{Outcome: Up}}, want: Summary{Up: 1, Down: 0}},
+		{name: "one Down", results: []Result{{Outcome: Down}}, want: Summary{Up: 0, Down: 1}},
+		{name: "all Up", results: []Result{{Outcome: Up}, {Outcome: Up}}, want: Summary{Up: 2, Down: 0}},
+		{name: "all Down", results: []Result{{Outcome: Down}, {Outcome: Down}}, want: Summary{Up: 0, Down: 2}},
+		{name: "Down after Up", results: []Result{{Outcome: Up}, {Outcome: Down}}, want: Summary{Up: 1, Down: 1}},
+		{name: "Up after Down", results: []Result{{Outcome: Down}, {Outcome: Up}}, want: Summary{Up: 1, Down: 1}},
+		{name: "zero Outcome counts as Down", results: []Result{{}}, want: Summary{Up: 0, Down: 1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := Summarize(test.results)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestSummaryString(t *testing.T) {
+	tests := []struct {
+		name    string
+		summary Summary
+		want    string
+	}{
+		{name: "no results", summary: Summary{}, want: "0 up, 0 down, 0 total"},
+		{name: "one Up", summary: Summary{Up: 1}, want: "1 up, 0 down, 1 total"},
+		{name: "one Down", summary: Summary{Down: 1}, want: "0 up, 1 down, 1 total"},
+		{name: "all Up", summary: Summary{Up: 2, Down: 0}, want: "2 up, 0 down, 2 total"},
+		{name: "all Down", summary: Summary{Up: 0, Down: 2}, want: "0 up, 2 down, 2 total"},
+		{name: "Down after Up", summary: Summary{Up: 1, Down: 1}, want: "1 up, 1 down, 2 total"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, test.summary.String())
+		})
+	}
+}
