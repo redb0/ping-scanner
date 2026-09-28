@@ -20,7 +20,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	failFast := fs.Bool("fail-fast", false, "stop on first invalid target")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	filepath := fs.String("f", "", "read targets from file")
+	concurrency := fs.Int("concurrency", 10, "number of concurrent requests")
 	if err := fs.Parse(args); err != nil {
+		return int(probe.ExitUsage)
+	}
+	if *concurrency < 1 {
+		if _, err := fmt.Fprintln(stderr, "concurrency must be greater than 0"); err != nil {
+			return int(probe.ExitUsage)
+		}
 		return int(probe.ExitUsage)
 	}
 
@@ -42,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return int(probe.ExitUsage)
 	}
 
-	results := probe.Scan(targets, *insecure)
+	results := probe.Scan(targets, *insecure, *concurrency)
 	for i, result := range results {
 		if _, err := fmt.Fprintln(stdout, formatLine(targets[i], result)); err != nil {
 			return int(probe.ExitUsage)

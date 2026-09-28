@@ -3,7 +3,9 @@ package probe
 import (
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +64,7 @@ func TestScan(t *testing.T) {
 				})
 			}
 
-			got := Scan(targets, false)
+			got := Scan(targets, false, 4)
 
 			outcomes := make([]Outcome, len(got))
 			for i, result := range got {
@@ -73,10 +75,79 @@ func TestScan(t *testing.T) {
 	}
 }
 
+func TestScan_limitsConcurrency(t *testing.T) {
+	const (
+		n     = 6
+		limit = 2
+	)
+	var current, maxSeen atomic.Int32
+	release := make(chan struct{})
+	statuses := []int{200, 201, 202, 204, 205, 206}
+	targets := make([]Target, n)
+	for i, status := range statuses {
+		targets[i] = startServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			seen := current.Add(1)
+			for {
+				old := maxSeen.Load()
+				if seen <= old || maxSeen.CompareAndSwap(old, seen) {
+					break
+				}
+			}
+			<-release
+			w.WriteHeader(status)
+		})
+	}
+
+	done := make(chan []Result, 1)
+	go func() {
+		done <- Scan(targets, false, limit)
+	}()
+
+	require.Eventually(t, func() bool {
+		return current.Load() == limit
+	}, time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(limit), current.Load())
+	assert.Equal(t, int32(limit), maxSeen.Load())
+	close(release)
+
+	var got []Result
+	select {
+	case got = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan did not finish")
+	}
+	require.Len(t, got, n)
+	for i, status := range statuses {
+		assert.Equal(t, status, got[i].StatusCode)
+	}
+}
+
+func TestScan_overlaps(t *testing.T) {
+	const (
+		n     = 4
+		delay = 150 * time.Millisecond
+	)
+	targets := make([]Target, n)
+	for i := range targets {
+		targets[i] = startServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(delay)
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+
+	start := time.Now()
+	got := Scan(targets, false, n)
+	elapsed := time.Since(start)
+
+	require.Len(t, got, n)
+	assert.Less(t, elapsed, 450*time.Millisecond)
+}
+
 func TestScan_selfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, false)
+	got := Scan([]Target{Target(srv.URL)}, false, 1)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, Down, got[0].Outcome)
@@ -87,7 +158,7 @@ func TestScan_selfSigned(t *testing.T) {
 func TestScan_insecureSelfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, true)
+	got := Scan([]Target{Target(srv.URL)}, true, 1)
 
 	require.Len(t, got, 1)
 	require.NoError(t, got[0].Err)
