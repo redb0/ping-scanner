@@ -1,6 +1,9 @@
 package probe
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 type ExitCode int
 
@@ -35,12 +38,26 @@ func Summarize(results []Result) Summary {
 	return summary
 }
 
-func Scan(targets []Target, insecure bool) []Result {
+func Scan(targets []Target, insecure bool, concurrency int) []Result {
 	client := httpClient(insecure)
 	results := make([]Result, len(targets))
-	for i, target := range targets {
-		results[i] = Probe(target, client)
+	workers := min(concurrency, len(targets))
+	jobs := make(chan int)
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for i := range jobs {
+				results[i] = Probe(targets[i], client)
+			}
+		})
 	}
+
+	for i := range targets {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
 	return results
 }
 

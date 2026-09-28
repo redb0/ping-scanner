@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,6 +137,18 @@ func TestRun(t *testing.T) {
 			wantCode:   int(probe.ExitUsage),
 			wantStderr: "open " + missing + ": no such file or directory\n",
 		},
+		{
+			name:          "concurrency keeps order and exit",
+			args:          []string{"--concurrency", "4", up, down},
+			wantCode:      int(probe.ExitDown),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", "") + stdoutSummary(1, 1),
+		},
+		{
+			name:       "concurrency must be positive",
+			args:       []string{"--concurrency", "0", up},
+			wantCode:   int(probe.ExitUsage),
+			wantStderr: "concurrency must be greater than 0\n",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -144,6 +159,83 @@ func TestRun(t *testing.T) {
 			assert.Equal(t, test.wantStderr, stderr.String())
 		})
 	}
+}
+
+func TestRun_concurrencyOrder(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(slow.Close)
+	fast := startCLIServer(t, http.StatusInternalServerError)
+
+	var stdout, stderr bytes.Buffer
+	got := run([]string{"--concurrency", "2", slow.URL, fast}, &stdout, &stderr)
+
+	assert.Equal(t, int(probe.ExitDown), got)
+	assert.Regexp(t, "^"+stdoutLine(slow.URL, "Up", "200", "")+stdoutLine(fast, "Down", "500", "")+stdoutSummary(1, 1)+"$", stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestRun_defaultConcurrency(t *testing.T) {
+	const n = 10
+	var current, maxSeen atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	releaseAll := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+
+	urls := make([]string, n)
+	for i := range n {
+		status := http.StatusOK + i
+		urls[i] = startGateServer(t, status, &current, &maxSeen, release)
+	}
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(urls, &stdout, &stderr)
+	}()
+
+	require.Eventually(t, func() bool {
+		return current.Load() == n
+	}, 2*time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(n), maxSeen.Load())
+	releaseAll()
+
+	var got int
+	select {
+	case got = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not finish")
+	}
+	assert.Equal(t, int(probe.ExitOK), got)
+	assert.Empty(t, stderr.String())
+
+	var pattern strings.Builder
+	for i, raw := range urls {
+		pattern.WriteString(stdoutLine(raw, "Up", fmt.Sprintf("%d", http.StatusOK+i), ""))
+	}
+	pattern.WriteString(stdoutSummary(n, 0))
+	assert.Regexp(t, "^"+pattern.String()+"$", stdout.String())
+}
+
+func startGateServer(t *testing.T, status int, current, maxSeen *atomic.Int32, release <-chan struct{}) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		seen := current.Add(1)
+		for {
+			old := maxSeen.Load()
+			if seen <= old || maxSeen.CompareAndSwap(old, seen) {
+				break
+			}
+		}
+		<-release
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 func TestRun_connectionRefused(t *testing.T) {
