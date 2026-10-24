@@ -64,7 +64,7 @@ func TestScan(t *testing.T) {
 				})
 			}
 
-			got := Scan(targets, false, 4)
+			got := Scan(targets, false, 4, 5*time.Second)
 
 			outcomes := make([]Outcome, len(got))
 			for i, result := range got {
@@ -100,7 +100,7 @@ func TestScan_limitsConcurrency(t *testing.T) {
 
 	done := make(chan []Result, 1)
 	go func() {
-		done <- Scan(targets, false, limit)
+		done <- Scan(targets, false, limit, 5*time.Second)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -137,17 +137,42 @@ func TestScan_overlaps(t *testing.T) {
 	}
 
 	start := time.Now()
-	got := Scan(targets, false, n)
+	got := Scan(targets, false, n, 5*time.Second)
 	elapsed := time.Since(start)
 
 	require.Len(t, got, n)
 	assert.Less(t, elapsed, 450*time.Millisecond)
 }
 
+// TestScan_hungTargetDoesNotBlockOthers проверяет, что при двух воркерах
+// быстрая цель отвечает, а скан заканчивается вместе с таймаутом зависшей.
+func TestScan_hungTargetDoesNotBlockOthers(t *testing.T) {
+	const budget = 200 * time.Millisecond
+	hung := startServer(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	fast := startServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	start := time.Now()
+	got := Scan([]Target{hung, fast}, false, 2, budget)
+	elapsed := time.Since(start)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, Down, got[0].Outcome)
+	assert.Equal(t, 0, got[0].StatusCode)
+	assert.Equal(t, "timeout", got[0].Reason())
+	assert.GreaterOrEqual(t, got[0].Latency, budget)
+	assert.Equal(t, Up, got[1].Outcome)
+	assert.Equal(t, http.StatusOK, got[1].StatusCode)
+	assert.Less(t, elapsed, time.Second)
+}
+
 func TestScan_selfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, false, 1)
+	got := Scan([]Target{Target(srv.URL)}, false, 1, 5*time.Second)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, Down, got[0].Outcome)
@@ -158,7 +183,7 @@ func TestScan_selfSigned(t *testing.T) {
 func TestScan_insecureSelfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, true, 1)
+	got := Scan([]Target{Target(srv.URL)}, true, 1, 5*time.Second)
 
 	require.Len(t, got, 1)
 	require.NoError(t, got[0].Err)

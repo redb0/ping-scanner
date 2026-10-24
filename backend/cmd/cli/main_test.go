@@ -149,6 +149,18 @@ func TestRun(t *testing.T) {
 			wantCode:   int(probe.ExitUsage),
 			wantStderr: "concurrency must be greater than 0\n",
 		},
+		{
+			name:          "timeout keeps order and exit",
+			args:          []string{"--timeout", "0.5", up, down},
+			wantCode:      int(probe.ExitDown),
+			stdoutPattern: stdoutLine(up, "Up", "200", "") + stdoutLine(down, "Down", "500", "") + stdoutSummary(1, 1),
+		},
+		{
+			name:       "timeout must be positive",
+			args:       []string{"--timeout", "0", up},
+			wantCode:   int(probe.ExitUsage),
+			wantStderr: "timeout must be greater than 0\n",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
