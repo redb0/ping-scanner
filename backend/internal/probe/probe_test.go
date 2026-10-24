@@ -172,3 +172,23 @@ func TestOutcome_String(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTimeout(t *testing.T) {
+	tests := []struct {
+		name         string
+		timeout      float64
+		want         error
+		wantDuration time.Duration
+	}{
+		{name: "positive", timeout: 1, want: nil, wantDuration: time.Second},
+		{name: "zero", timeout: 0, want: ErrInvalidTimeout, wantDuration: 0},
+		{name: "negative", timeout: -1, want: ErrInvalidTimeout, wantDuration: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ValidateTimeout(test.timeout)
+			assert.Equal(t, test.want, err)
+			assert.Equal(t, test.wantDuration, got)
+		})
+	}
+}
