@@ -55,7 +55,7 @@ func TestProbe(t *testing.T) {
 				assert.Equal(t, http.MethodGet, r.Method)
 				assert.Equal(t, userAgent, r.UserAgent())
 				w.WriteHeader(test.status)
-			}), httpClient(false))
+			}), httpClient(false), 5*time.Second)
 
 			require.NoError(t, got.Err)
 			assert.Equal(t, test.wantOutcome, got.Outcome)
@@ -65,7 +65,7 @@ func TestProbe(t *testing.T) {
 }
 
 func TestProbe_invalidURL(t *testing.T) {
-	got := Probe(Target("http://[::1]:namedport"), httpClient(false))
+	got := Probe(Target("http://[::1]:namedport"), httpClient(false), 5*time.Second)
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
 	assert.Error(t, got.Err)
@@ -77,12 +77,12 @@ func TestProbe_refused(t *testing.T) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	got := Probe(Target("http://"+addr), httpClient(false))
+	got := Probe(Target("http://"+addr), httpClient(false), 5*time.Second)
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
 	assert.Error(t, got.Err)
 	assert.Greater(t, got.Latency, time.Duration(0))
-	assert.Less(t, got.Latency, clientTimeout)
+	assert.Less(t, got.Latency, DefaultTimeout)
 }
 
 func TestProbe_redirect(t *testing.T) {
@@ -92,24 +92,30 @@ func TestProbe_redirect(t *testing.T) {
 			return
 		}
 		http.Redirect(w, r, "/up", http.StatusFound)
-	}), httpClient(false))
+	}), httpClient(false), 5*time.Second)
 
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
 	assert.Equal(t, http.StatusOK, got.StatusCode)
 }
 
+// TestProbe_timeout обрывает зависшую цель за 200 мс и проверяет
+// Down с причиной timeout.
 func TestProbe_timeout(t *testing.T) {
+	const budget = 200 * time.Millisecond
 	target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
 
-	got := Probe(target, httpClient(false))
+	start := time.Now()
+	got := Probe(target, httpClient(false), budget)
+	elapsed := time.Since(start)
 
 	assert.Equal(t, Down, got.Outcome)
 	assert.Equal(t, 0, got.StatusCode)
 	assert.Equal(t, "timeout", got.Reason())
-	assert.GreaterOrEqual(t, got.Latency, clientTimeout)
+	assert.GreaterOrEqual(t, got.Latency, budget)
+	assert.Less(t, elapsed, time.Second)
 }
 
 func TestProbe_bodyNotDownloaded(t *testing.T) {
@@ -122,7 +128,7 @@ func TestProbe_bodyNotDownloaded(t *testing.T) {
 	})
 	t.Cleanup(func() { close(hold) })
 
-	got := Probe(target, httpClient(false))
+	got := Probe(target, httpClient(false), 5*time.Second)
 
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
@@ -138,13 +144,13 @@ func TestProbe_latencySlowGreaterThanFast(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	client := httpClient(false)
-	assert.Greater(t, Probe(slow, client).Latency, Probe(fast, client).Latency)
+	assert.Greater(t, Probe(slow, client, 5*time.Second).Latency, Probe(fast, client, 5*time.Second).Latency)
 }
 
 func TestProbe_trustedCertificate(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Probe(Target(srv.URL), trustedClient(srv.Certificate()))
+	got := Probe(Target(srv.URL), trustedClient(srv.Certificate()), 5*time.Second)
 
 	require.NoError(t, got.Err)
 	assert.Equal(t, Up, got.Outcome)
@@ -163,6 +169,26 @@ func TestOutcome_String(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, test.outcome.String())
+		})
+	}
+}
+
+func TestValidateTimeout(t *testing.T) {
+	tests := []struct {
+		name         string
+		timeout      float64
+		want         error
+		wantDuration time.Duration
+	}{
+		{name: "positive", timeout: 1, want: nil, wantDuration: time.Second},
+		{name: "zero", timeout: 0, want: ErrInvalidTimeout, wantDuration: 0},
+		{name: "negative", timeout: -1, want: ErrInvalidTimeout, wantDuration: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ValidateTimeout(test.timeout)
+			assert.Equal(t, test.want, err)
+			assert.Equal(t, test.wantDuration, got)
 		})
 	}
 }

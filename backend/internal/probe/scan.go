@@ -3,6 +3,7 @@ package probe
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 type ExitCode int
@@ -38,7 +39,7 @@ func Summarize(results []Result) Summary {
 	return summary
 }
 
-func Scan(targets []Target, insecure bool, concurrency int) []Result {
+func Scan(targets []Target, insecure bool, concurrency int, timeout time.Duration) []Result {
 	client := httpClient(insecure)
 	results := make([]Result, len(targets))
 	workers := min(concurrency, len(targets))
@@ -48,7 +49,7 @@ func Scan(targets []Target, insecure bool, concurrency int) []Result {
 	for range workers {
 		wg.Go(func() {
 			for i := range jobs {
-				results[i] = Probe(targets[i], client)
+				results[i] = Probe(targets[i], client, timeout)
 			}
 		})
 	}
