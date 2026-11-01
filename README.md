@@ -47,8 +47,8 @@ SIGINT.
 
 ## Требования
 
-- Go, версия из `backend/go.mod` (сейчас 1.25.11)
-- для локального линта — [golangci-lint](https://golangci-lint.run/) v2.4.0
+- Go, версия из `backend/go.mod` (сейчас 1.27.3)
+- для локального линта — [golangci-lint](https://golangci-lint.run/) v2.15.0
   и [just](https://github.com/casey/just), если пользуетесь `justfile`
 
 ## Установка
