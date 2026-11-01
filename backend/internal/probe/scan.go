@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,9 +33,6 @@ func (s Summary) String() string {
 func Summarize(results []Result) Summary {
 	var summary Summary
 	for _, result := range results {
-		if result.IsInterrupted() {
-			continue
-		}
 		if result.Outcome == Up {
 			summary.Up++
 		} else {
@@ -64,7 +62,7 @@ func Scan(
 					return
 				}
 				result := Probe(ctx, targets[i], client, timeout)
-				if result.IsInterrupted() {
+				if errors.Is(result.Err, context.Canceled) {
 					return
 				}
 				results[i] = result

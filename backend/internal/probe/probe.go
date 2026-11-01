@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -39,10 +38,6 @@ type Result struct {
 
 func (r Result) Reason() string {
 	return clipReason(reason(r.Err))
-}
-
-func (r Result) IsInterrupted() bool {
-	return errors.Is(r.Err, context.Canceled)
 }
 
 // Observed сообщает, что проба завершилась ответом или сетевой ошибкой.
