@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -9,9 +10,10 @@ import (
 type ExitCode int
 
 const (
-	ExitOK    ExitCode = 0
-	ExitDown  ExitCode = 1
-	ExitUsage ExitCode = 2
+	ExitOK          ExitCode = 0
+	ExitDown        ExitCode = 1
+	ExitUsage       ExitCode = 2
+	ExitInterrupted ExitCode = 130
 )
 
 type Summary struct {
@@ -30,6 +32,9 @@ func (s Summary) String() string {
 func Summarize(results []Result) Summary {
 	var summary Summary
 	for _, result := range results {
+		if result.IsInterrupted() {
+			continue
+		}
 		if result.Outcome == Up {
 			summary.Up++
 		} else {
@@ -39,7 +44,13 @@ func Summarize(results []Result) Summary {
 	return summary
 }
 
-func Scan(targets []Target, insecure bool, concurrency int, timeout time.Duration) []Result {
+func Scan(
+	ctx context.Context,
+	targets []Target,
+	insecure bool,
+	concurrency int,
+	timeout time.Duration,
+) ([]Result, bool) {
 	client := httpClient(insecure)
 	results := make([]Result, len(targets))
 	workers := min(concurrency, len(targets))
@@ -49,17 +60,22 @@ func Scan(targets []Target, insecure bool, concurrency int, timeout time.Duratio
 	for range workers {
 		wg.Go(func() {
 			for i := range jobs {
-				results[i] = Probe(targets[i], client, timeout)
+				if ctx.Err() != nil {
+					return
+				}
+				result := Probe(ctx, targets[i], client, timeout)
+				if result.IsInterrupted() {
+					return
+				}
+				results[i] = result
 			}
 		})
 	}
 
-	for i := range targets {
-		jobs <- i
-	}
-	close(jobs)
+	enqueue(ctx, jobs, len(targets))
 	wg.Wait()
-	return results
+
+	return results, ctx.Err() != nil
 }
 
 func Exit(results []Result) ExitCode {
@@ -72,4 +88,15 @@ func Exit(results []Result) ExitCode {
 		}
 	}
 	return ExitOK
+}
+
+func enqueue(ctx context.Context, jobs chan<- int, n int) {
+	defer close(jobs)
+	for i := range n {
+		select {
+		case <-ctx.Done():
+			return
+		case jobs <- i:
+		}
+	}
 }

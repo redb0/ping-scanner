@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -40,20 +41,30 @@ func (r Result) Reason() string {
 	return clipReason(reason(r.Err))
 }
 
-func Probe(target Target, client *http.Client, timeout time.Duration) Result {
+func (r Result) IsInterrupted() bool {
+	return errors.Is(r.Err, context.Canceled)
+}
+
+// Observed сообщает, что проба завершилась ответом или сетевой ошибкой.
+// Нулевой Result — слот, который Scan не заполнил: цель не стартовала или отмена оборвала запрос.
+func (r Result) Observed() bool {
+	return r.Outcome == Up || r.StatusCode != 0 || r.Err != nil
+}
+
+func Probe(ctx context.Context, target Target, client *http.Client, timeout time.Duration) Result {
 	start := time.Now()
-	result := httpGet(target, client, timeout)
+	result := httpGet(ctx, target, client, timeout)
 	result.Latency = time.Since(start)
 	return result
 }
 
-func httpGet(target Target, client *http.Client, timeout time.Duration) Result {
+func httpGet(ctx context.Context, target Target, client *http.Client, timeout time.Duration) Result {
 	result := Result{Outcome: Down}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	httpCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, string(target), nil)
+	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet, string(target), nil)
 	if err != nil {
 		result.Err = err
 		return result

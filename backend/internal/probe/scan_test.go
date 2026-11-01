@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -64,7 +65,7 @@ func TestScan(t *testing.T) {
 				})
 			}
 
-			got := Scan(targets, false, 4, 5*time.Second)
+			got, _ := Scan(t.Context(), targets, false, 4, 5*time.Second)
 
 			outcomes := make([]Outcome, len(got))
 			for i, result := range got {
@@ -100,7 +101,8 @@ func TestScan_limitsConcurrency(t *testing.T) {
 
 	done := make(chan []Result, 1)
 	go func() {
-		done <- Scan(targets, false, limit, 5*time.Second)
+		got, _ := Scan(t.Context(), targets, false, limit, 5*time.Second)
+		done <- got
 	}()
 
 	require.Eventually(t, func() bool {
@@ -137,7 +139,7 @@ func TestScan_overlaps(t *testing.T) {
 	}
 
 	start := time.Now()
-	got := Scan(targets, false, n, 5*time.Second)
+	got, _ := Scan(t.Context(), targets, false, n, 5*time.Second)
 	elapsed := time.Since(start)
 
 	require.Len(t, got, n)
@@ -156,7 +158,7 @@ func TestScan_hungTargetDoesNotBlockOthers(t *testing.T) {
 	})
 
 	start := time.Now()
-	got := Scan([]Target{hung, fast}, false, 2, budget)
+	got, _ := Scan(t.Context(), []Target{hung, fast}, false, 2, budget)
 	elapsed := time.Since(start)
 
 	require.Len(t, got, 2)
@@ -172,7 +174,7 @@ func TestScan_hungTargetDoesNotBlockOthers(t *testing.T) {
 func TestScan_selfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, false, 1, 5*time.Second)
+	got, _ := Scan(t.Context(), []Target{Target(srv.URL)}, false, 1, 5*time.Second)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, Down, got[0].Outcome)
@@ -183,12 +185,58 @@ func TestScan_selfSigned(t *testing.T) {
 func TestScan_insecureSelfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got := Scan([]Target{Target(srv.URL)}, true, 1, 5*time.Second)
+	got, _ := Scan(t.Context(), []Target{Target(srv.URL)}, true, 1, 5*time.Second)
 
 	require.Len(t, got, 1)
 	require.NoError(t, got[0].Err)
 	assert.Equal(t, Up, got[0].Outcome)
 	assert.Equal(t, http.StatusOK, got[0].StatusCode)
+}
+
+func TestScan_cancellation(t *testing.T) {
+	var started atomic.Int32
+	hang := func(w http.ResponseWriter, r *http.Request) {
+		started.Add(1)
+		<-r.Context().Done()
+	}
+	fast := startServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	slow1 := startServer(t, hang)
+	slow2 := startServer(t, hang)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	var (
+		got         []Result
+		interrupted bool
+	)
+	go func() {
+		got, interrupted = Scan(ctx, []Target{fast, slow1, slow2}, false, 1, 5*time.Second)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return started.Load() == 1
+	}, time.Second, 5*time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scan did not return after cancel")
+	}
+
+	assert.True(t, interrupted)
+	require.Len(t, got, 3)
+	require.NoError(t, got[0].Err)
+	assert.Equal(t, Up, got[0].Outcome)
+	assert.Equal(t, http.StatusOK, got[0].StatusCode)
+	assert.Equal(t, Result{}, got[1])
+	assert.Equal(t, Result{}, got[2])
+	assert.Equal(t, int32(1), started.Load())
 }
 
 func TestExit(t *testing.T) {
