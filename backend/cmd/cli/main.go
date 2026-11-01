@@ -61,39 +61,34 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return int(probe.ExitUsage)
 	}
 
-	results, interrupted := probe.Scan(ctx, targets, *insecure, *concurrency, timeout)
-	observed := make([]probe.Result, 0, len(results))
-	for i, result := range results {
-		if !result.Observed() {
-			continue
-		}
-		observed = append(observed, result)
-		if _, err := fmt.Fprintln(stdout, formatLine(targets[i], result)); err != nil {
+	scanResult := probe.Scan(ctx, targets, *insecure, *concurrency, timeout)
+	for _, result := range scanResult.Finished {
+		if _, err := fmt.Fprintln(stdout, formatLine(result)); err != nil {
 			return int(probe.ExitUsage)
 		}
 	}
 
-	summary := probe.Summarize(observed)
-	if len(observed) > 0 {
+	summary := scanResult.Summary()
+	if len(scanResult.Finished) > 0 {
 		if _, err := fmt.Fprintln(stdout, summary.String()); err != nil {
 			return int(probe.ExitUsage)
 		}
 	}
 
-	if interrupted {
+	code := scanResult.Exit()
+	if code == probe.ExitInterrupted {
 		if _, err := fmt.Fprintln(stdout, "(interrupted)"); err != nil {
 			return int(probe.ExitUsage)
 		}
-		return int(probe.ExitInterrupted)
 	}
 
-	return int(probe.Exit(results))
+	return int(code)
 }
 
-func formatLine(target probe.Target, result probe.Result) string {
+func formatLine(result probe.Result) string {
 	line := fmt.Sprintf(
 		"%s %s %d %d",
-		target,
+		result.Target,
 		result.Outcome,
 		result.StatusCode,
 		result.Latency.Milliseconds(),

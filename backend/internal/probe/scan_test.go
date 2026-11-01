@@ -65,13 +65,15 @@ func TestScan(t *testing.T) {
 				})
 			}
 
-			got, _ := Scan(t.Context(), targets, false, 4, 5*time.Second)
+			got := Scan(t.Context(), targets, false, 4, 5*time.Second)
 
-			outcomes := make([]Outcome, len(got))
-			for i, result := range got {
-				outcomes[i] = result.Outcome
+			outcomes := make([]Outcome, len(got.Finished))
+			for i, finished := range got.Finished {
+				assert.Equal(t, targets[i], finished.Target)
+				outcomes[i] = finished.Outcome
 			}
 			assert.Equal(t, test.want, outcomes)
+			assert.False(t, got.interrupted)
 		})
 	}
 }
@@ -99,10 +101,9 @@ func TestScan_limitsConcurrency(t *testing.T) {
 		})
 	}
 
-	done := make(chan []Result, 1)
+	done := make(chan ScanResult, 1)
 	go func() {
-		got, _ := Scan(t.Context(), targets, false, limit, 5*time.Second)
-		done <- got
+		done <- Scan(t.Context(), targets, false, limit, 5*time.Second)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -113,15 +114,16 @@ func TestScan_limitsConcurrency(t *testing.T) {
 	assert.Equal(t, int32(limit), maxSeen.Load())
 	close(release)
 
-	var got []Result
+	var got ScanResult
 	select {
 	case got = <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("scan did not finish")
 	}
-	require.Len(t, got, n)
+	require.Len(t, got.Finished, n)
 	for i, status := range statuses {
-		assert.Equal(t, status, got[i].StatusCode)
+		assert.Equal(t, targets[i], got.Finished[i].Target)
+		assert.Equal(t, status, got.Finished[i].StatusCode)
 	}
 }
 
@@ -139,10 +141,10 @@ func TestScan_overlaps(t *testing.T) {
 	}
 
 	start := time.Now()
-	got, _ := Scan(t.Context(), targets, false, n, 5*time.Second)
+	got := Scan(t.Context(), targets, false, n, 5*time.Second)
 	elapsed := time.Since(start)
 
-	require.Len(t, got, n)
+	require.Len(t, got.Finished, n)
 	assert.Less(t, elapsed, 450*time.Millisecond)
 }
 
@@ -158,39 +160,44 @@ func TestScan_hungTargetDoesNotBlockOthers(t *testing.T) {
 	})
 
 	start := time.Now()
-	got, _ := Scan(t.Context(), []Target{hung, fast}, false, 2, budget)
+	got := Scan(t.Context(), []Target{hung, fast}, false, 2, budget)
 	elapsed := time.Since(start)
 
-	require.Len(t, got, 2)
-	assert.Equal(t, Down, got[0].Outcome)
-	assert.Equal(t, 0, got[0].StatusCode)
-	assert.Equal(t, "timeout", got[0].Reason())
-	assert.GreaterOrEqual(t, got[0].Latency, budget)
-	assert.Equal(t, Up, got[1].Outcome)
-	assert.Equal(t, http.StatusOK, got[1].StatusCode)
+	require.Len(t, got.Finished, 2)
+	assert.False(t, got.interrupted)
+	assert.Equal(t, hung, got.Finished[0].Target)
+	assert.Equal(t, Down, got.Finished[0].Outcome)
+	assert.Equal(t, 0, got.Finished[0].StatusCode)
+	assert.Equal(t, "timeout", got.Finished[0].Reason())
+	assert.GreaterOrEqual(t, got.Finished[0].Latency, budget)
+	assert.Equal(t, fast, got.Finished[1].Target)
+	assert.Equal(t, Up, got.Finished[1].Outcome)
+	assert.Equal(t, http.StatusOK, got.Finished[1].StatusCode)
 	assert.Less(t, elapsed, time.Second)
 }
 
 func TestScan_selfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got, _ := Scan(t.Context(), []Target{Target(srv.URL)}, false, 1, 5*time.Second)
+	got := Scan(t.Context(), []Target{Target(srv.URL)}, false, 1, 5*time.Second)
 
-	require.Len(t, got, 1)
-	assert.Equal(t, Down, got[0].Outcome)
-	assert.Equal(t, 0, got[0].StatusCode)
-	assert.True(t, strings.HasPrefix(got[0].Reason(), "TLS:"))
+	require.Len(t, got.Finished, 1)
+	assert.Equal(t, Target(srv.URL), got.Finished[0].Target)
+	assert.Equal(t, Down, got.Finished[0].Outcome)
+	assert.Equal(t, 0, got.Finished[0].StatusCode)
+	assert.True(t, strings.HasPrefix(got.Finished[0].Reason(), "TLS:"))
 }
 
 func TestScan_insecureSelfSigned(t *testing.T) {
 	srv := tlstest.Server(t)
 
-	got, _ := Scan(t.Context(), []Target{Target(srv.URL)}, true, 1, 5*time.Second)
+	got := Scan(t.Context(), []Target{Target(srv.URL)}, true, 1, 5*time.Second)
 
-	require.Len(t, got, 1)
-	require.NoError(t, got[0].Err)
-	assert.Equal(t, Up, got[0].Outcome)
-	assert.Equal(t, http.StatusOK, got[0].StatusCode)
+	require.Len(t, got.Finished, 1)
+	assert.Equal(t, Target(srv.URL), got.Finished[0].Target)
+	require.NoError(t, got.Finished[0].Err)
+	assert.Equal(t, Up, got.Finished[0].Outcome)
+	assert.Equal(t, http.StatusOK, got.Finished[0].StatusCode)
 }
 
 func TestScan_cancellation(t *testing.T) {
@@ -209,12 +216,9 @@ func TestScan_cancellation(t *testing.T) {
 	defer cancel()
 
 	done := make(chan struct{})
-	var (
-		got         []Result
-		interrupted bool
-	)
+	var got ScanResult
 	go func() {
-		got, interrupted = Scan(ctx, []Target{fast, slow1, slow2}, false, 1, 5*time.Second)
+		got = Scan(ctx, []Target{fast, slow1, slow2}, false, 1, 5*time.Second)
 		close(done)
 	}()
 
@@ -229,36 +233,52 @@ func TestScan_cancellation(t *testing.T) {
 		t.Fatal("scan did not return after cancel")
 	}
 
-	assert.True(t, interrupted)
-	require.Len(t, got, 3)
-	require.NoError(t, got[0].Err)
-	assert.Equal(t, Up, got[0].Outcome)
-	assert.Equal(t, http.StatusOK, got[0].StatusCode)
-	assert.Equal(t, Result{}, got[1])
-	assert.Equal(t, Result{}, got[2])
+	assert.True(t, got.interrupted)
+	require.Len(t, got.Finished, 1)
+	assert.Equal(t, fast, got.Finished[0].Target)
+	require.NoError(t, got.Finished[0].Err)
+	assert.Equal(t, Up, got.Finished[0].Outcome)
+	assert.Equal(t, http.StatusOK, got.Finished[0].StatusCode)
+	assert.Equal(t, Summary{Up: 1}, got.Summary())
+	assert.Equal(t, ExitInterrupted, got.Exit())
 	assert.Equal(t, int32(1), started.Load())
 }
 
 func TestExit(t *testing.T) {
+	up := Result{Outcome: Up}
+	down := Result{Outcome: Down}
 	tests := []struct {
-		name    string
-		results []Result
-		want    ExitCode
+		name string
+		scan ScanResult
+		want ExitCode
 	}{
-		{name: "no results", results: []Result{}, want: ExitUsage},
-		{name: "one up", results: []Result{{Outcome: Up}}, want: ExitOK},
-		{name: "one down", results: []Result{{Outcome: Down}}, want: ExitDown},
-		{name: "all up", results: []Result{{Outcome: Up}, {Outcome: Up}}, want: ExitOK},
-		{name: "down after up", results: []Result{{Outcome: Up}, {Outcome: Down}}, want: ExitDown},
-		{name: "up after down", results: []Result{{Outcome: Down}, {Outcome: Up}}, want: ExitDown},
-		{name: "all down", results: []Result{{Outcome: Down}, {Outcome: Down}}, want: ExitDown},
+		{name: "no results", scan: ScanResult{}, want: ExitUsage},
+		{name: "one up", scan: ScanResult{Finished: []Result{up}}, want: ExitOK},
+		{name: "one down", scan: ScanResult{Finished: []Result{down}}, want: ExitDown},
+		{name: "all up", scan: ScanResult{Finished: []Result{up, up}}, want: ExitOK},
+		{name: "down after up", scan: ScanResult{Finished: []Result{up, down}}, want: ExitDown},
+		{name: "up after down", scan: ScanResult{Finished: []Result{down, up}}, want: ExitDown},
+		{name: "all down", scan: ScanResult{Finished: []Result{down, down}}, want: ExitDown},
+		{name: "interrupted with no probes", scan: ScanResult{interrupted: true}, want: ExitInterrupted},
+		{name: "interrupted with up", scan: ScanResult{interrupted: true, Finished: []Result{up}}, want: ExitInterrupted},
+		{name: "interrupted with down", scan: ScanResult{interrupted: true, Finished: []Result{down}}, want: ExitInterrupted},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := Exit(test.results)
-			assert.Equal(t, test.want, got)
+			assert.Equal(t, test.want, test.scan.Exit())
 		})
 	}
+}
+
+func TestScanResult_Summary(t *testing.T) {
+	got := ScanResult{
+		interrupted: true,
+		Finished: []Result{
+			{Outcome: Up},
+			{Outcome: Down, StatusCode: http.StatusInternalServerError},
+		},
+	}.Summary()
+	assert.Equal(t, Summary{Up: 1, Down: 1}, got)
 }
 
 func TestSummarize(t *testing.T) {

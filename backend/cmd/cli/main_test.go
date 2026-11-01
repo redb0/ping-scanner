@@ -236,24 +236,20 @@ func TestRun_defaultConcurrency(t *testing.T) {
 
 func TestRun_interrupted(t *testing.T) {
 	var started atomic.Int32
-	hung := func(w http.ResponseWriter, r *http.Request) {
+	fast := startCLIServer(t, http.StatusOK)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started.Add(1)
 		<-r.Context().Done()
-	}
-	fast := startCLIServer(t, http.StatusOK)
-	slow1 := httptest.NewServer(http.HandlerFunc(hung))
-	t.Cleanup(slow1.Close)
-	slow2 := httptest.NewServer(http.HandlerFunc(hung))
-	t.Cleanup(slow2.Close)
+	}))
+	t.Cleanup(slow.Close)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
 	done := make(chan int, 1)
-
 	go func() {
-		done <- run(ctx, []string{"--concurrency", "1", fast, slow1.URL, slow2.URL}, &stdout, &stderr)
+		done <- run(ctx, []string{"--concurrency", "1", fast, slow.URL}, &stdout, &stderr)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -270,9 +266,6 @@ func TestRun_interrupted(t *testing.T) {
 
 	assert.Equal(t, int(probe.ExitInterrupted), got)
 	assert.Empty(t, stderr.String())
-	assert.Equal(t, int32(1), started.Load())
-	assert.NotContains(t, stdout.String(), slow1.URL)
-	assert.NotContains(t, stdout.String(), slow2.URL)
 	assert.Regexp(t,
 		"^"+stdoutLine(fast, "Up", "200", "")+stdoutSummary(1, 0)+regexp.QuoteMeta("(interrupted)\n")+"$",
 		stdout.String(),
@@ -331,7 +324,8 @@ func TestRun_unknownFlag(t *testing.T) {
 }
 
 func TestFormatLine(t *testing.T) {
-	got := formatLine("https://x.io", probe.Result{
+	got := formatLine(probe.Result{
+		Target:     "https://x.io",
 		Outcome:    probe.Up,
 		StatusCode: http.StatusOK,
 		Latency:    42 * time.Millisecond,

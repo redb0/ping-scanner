@@ -51,13 +51,15 @@ func TestProbe(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := Probe(t.Context(), startServer(t, func(w http.ResponseWriter, r *http.Request) {
+			target := startServer(t, func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, http.MethodGet, r.Method)
 				assert.Equal(t, userAgent, r.UserAgent())
 				w.WriteHeader(test.status)
-			}), httpClient(false), 5*time.Second)
+			})
+			got := Probe(t.Context(), target, httpClient(false), 5*time.Second)
 
 			require.NoError(t, got.Err)
+			assert.Equal(t, target, got.Target)
 			assert.Equal(t, test.wantOutcome, got.Outcome)
 			assert.Equal(t, test.status, got.StatusCode)
 		})

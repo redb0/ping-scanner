@@ -30,6 +30,32 @@ func (s Summary) String() string {
 	return fmt.Sprintf("%d up, %d down, %d total", s.Up, s.Down, s.Total())
 }
 
+// ScanResult — итог одного Scan.
+// Finished — завершённые Probe в порядке входа. Прерывание снаружи видно как Exit() == ExitInterrupted.
+type ScanResult struct {
+	Finished    []Result
+	interrupted bool
+}
+
+func (s ScanResult) Summary() Summary {
+	return Summarize(s.Finished)
+}
+
+func (s ScanResult) Exit() ExitCode {
+	if s.interrupted {
+		return ExitInterrupted
+	}
+	if len(s.Finished) == 0 {
+		return ExitUsage
+	}
+	for _, result := range s.Finished {
+		if result.Outcome == Down {
+			return ExitDown
+		}
+	}
+	return ExitOK
+}
+
 func Summarize(results []Result) Summary {
 	var summary Summary
 	for _, result := range results {
@@ -48,9 +74,10 @@ func Scan(
 	insecure bool,
 	concurrency int,
 	timeout time.Duration,
-) ([]Result, bool) {
+) ScanResult {
 	client := httpClient(insecure)
 	results := make([]Result, len(targets))
+	done := make([]bool, len(targets))
 	workers := min(concurrency, len(targets))
 	jobs := make(chan int)
 
@@ -66,6 +93,7 @@ func Scan(
 					return
 				}
 				results[i] = result
+				done[i] = true
 			}
 		})
 	}
@@ -73,19 +101,17 @@ func Scan(
 	enqueue(ctx, jobs, len(targets))
 	wg.Wait()
 
-	return results, ctx.Err() != nil
-}
-
-func Exit(results []Result) ExitCode {
-	if len(results) == 0 {
-		return ExitUsage
-	}
-	for _, result := range results {
-		if result.Outcome == Down {
-			return ExitDown
+	finished := make([]Result, 0, len(targets))
+	for i := range targets {
+		if !done[i] {
+			continue
 		}
+		finished = append(finished, results[i])
 	}
-	return ExitOK
+	return ScanResult{
+		Finished:    finished,
+		interrupted: ctx.Err() != nil,
+	}
 }
 
 func enqueue(ctx context.Context, jobs chan<- int, n int) {

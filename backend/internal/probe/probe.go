@@ -30,6 +30,7 @@ func (o Outcome) String() string {
 
 // Result — исход одной Probe.
 type Result struct {
+	Target     Target
 	Outcome    Outcome
 	StatusCode int   // финальный HTTP-код после редиректов; 0, если ответа нет
 	Err        error // сырая ошибка; nil, если ответ получен
@@ -40,15 +41,10 @@ func (r Result) Reason() string {
 	return clipReason(reason(r.Err))
 }
 
-// Observed сообщает, что проба завершилась ответом или сетевой ошибкой.
-// Нулевой Result — слот, который Scan не заполнил: цель не стартовала или отмена оборвала запрос.
-func (r Result) Observed() bool {
-	return r.Outcome == Up || r.StatusCode != 0 || r.Err != nil
-}
-
 func Probe(ctx context.Context, target Target, client *http.Client, timeout time.Duration) Result {
 	start := time.Now()
 	result := httpGet(ctx, target, client, timeout)
+	result.Target = target
 	result.Latency = time.Since(start)
 	return result
 }
