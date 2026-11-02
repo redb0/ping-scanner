@@ -1,20 +1,24 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"ping-scanner/internal/probe"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ping-scanner", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	failFast := fs.Bool("fail-fast", false, "stop on first invalid target")
@@ -57,27 +61,34 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return int(probe.ExitUsage)
 	}
 
-	results := probe.Scan(targets, *insecure, *concurrency, timeout)
-	for i, result := range results {
-		if _, err := fmt.Fprintln(stdout, formatLine(targets[i], result)); err != nil {
+	scanResult := probe.Scan(ctx, targets, *insecure, *concurrency, timeout)
+	for _, result := range scanResult.Finished {
+		if _, err := fmt.Fprintln(stdout, formatLine(result)); err != nil {
 			return int(probe.ExitUsage)
 		}
 	}
 
-	summary := probe.Summarize(results)
-	if len(results) > 0 {
+	summary := scanResult.Summary()
+	if len(scanResult.Finished) > 0 {
 		if _, err := fmt.Fprintln(stdout, summary.String()); err != nil {
 			return int(probe.ExitUsage)
 		}
 	}
 
-	return int(probe.Exit(results))
+	code := scanResult.Exit()
+	if code == probe.ExitInterrupted {
+		if _, err := fmt.Fprintln(stdout, "(interrupted)"); err != nil {
+			return int(probe.ExitUsage)
+		}
+	}
+
+	return int(code)
 }
 
-func formatLine(target probe.Target, result probe.Result) string {
+func formatLine(result probe.Result) string {
 	line := fmt.Sprintf(
 		"%s %s %d %d",
-		target,
+		result.Target,
 		result.Outcome,
 		result.StatusCode,
 		result.Latency.Milliseconds(),

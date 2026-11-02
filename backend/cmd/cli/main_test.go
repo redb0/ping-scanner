@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -165,7 +166,7 @@ func TestRun(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			got := run(test.args, &stdout, &stderr)
+			got := run(t.Context(), test.args, &stdout, &stderr)
 			assert.Equal(t, test.wantCode, got)
 			assert.Regexp(t, "^"+test.stdoutPattern+"$", stdout.String())
 			assert.Equal(t, test.wantStderr, stderr.String())
@@ -182,7 +183,7 @@ func TestRun_concurrencyOrder(t *testing.T) {
 	fast := startCLIServer(t, http.StatusInternalServerError)
 
 	var stdout, stderr bytes.Buffer
-	got := run([]string{"--concurrency", "2", slow.URL, fast}, &stdout, &stderr)
+	got := run(t.Context(), []string{"--concurrency", "2", slow.URL, fast}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitDown), got)
 	assert.Regexp(t, "^"+stdoutLine(slow.URL, "Up", "200", "")+stdoutLine(fast, "Down", "500", "")+stdoutSummary(1, 1)+"$", stdout.String())
@@ -206,7 +207,7 @@ func TestRun_defaultConcurrency(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
-		done <- run(urls, &stdout, &stderr)
+		done <- run(t.Context(), urls, &stdout, &stderr)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -231,6 +232,44 @@ func TestRun_defaultConcurrency(t *testing.T) {
 	}
 	pattern.WriteString(stdoutSummary(n, 0))
 	assert.Regexp(t, "^"+pattern.String()+"$", stdout.String())
+}
+
+func TestRun_interrupted(t *testing.T) {
+	var started atomic.Int32
+	fast := startCLIServer(t, http.StatusOK)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started.Add(1)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(slow.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--concurrency", "1", fast, slow.URL}, &stdout, &stderr)
+	}()
+
+	require.Eventually(t, func() bool {
+		return started.Load() == 1
+	}, time.Second, 5*time.Millisecond)
+	cancel()
+
+	var got int
+	select {
+	case got = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("run did not return after cancel")
+	}
+
+	assert.Equal(t, int(probe.ExitInterrupted), got)
+	assert.Empty(t, stderr.String())
+	assert.Regexp(t,
+		"^"+stdoutLine(fast, "Up", "200", "")+stdoutSummary(1, 0)+regexp.QuoteMeta("(interrupted)\n")+"$",
+		stdout.String(),
+	)
 }
 
 func startGateServer(t *testing.T, status int, current, maxSeen *atomic.Int32, release <-chan struct{}) string {
@@ -258,7 +297,7 @@ func TestRun_connectionRefused(t *testing.T) {
 
 	raw := "http://" + addr
 	var stdout, stderr bytes.Buffer
-	got := run([]string{raw}, &stdout, &stderr)
+	got := run(t.Context(), []string{raw}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitDown), got)
 	assert.Regexp(t, "^"+stdoutLine(raw, "Down", "0", "connection refused")+stdoutSummary(0, 1)+"$", stdout.String())
@@ -269,7 +308,7 @@ func TestRun_insecure(t *testing.T) {
 	srv := tlstest.Server(t)
 
 	var stdout, stderr bytes.Buffer
-	got := run([]string{"--insecure", srv.URL}, &stdout, &stderr)
+	got := run(t.Context(), []string{"--insecure", srv.URL}, &stdout, &stderr)
 
 	assert.Equal(t, int(probe.ExitOK), got)
 	assert.Regexp(t, "^"+stdoutLine(srv.URL, "Up", "200", "")+stdoutSummary(1, 0)+"$", stdout.String())
@@ -278,14 +317,15 @@ func TestRun_insecure(t *testing.T) {
 
 func TestRun_unknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	got := run([]string{"--nope"}, &stdout, &stderr)
+	got := run(t.Context(), []string{"--nope"}, &stdout, &stderr)
 	assert.Equal(t, int(probe.ExitUsage), got)
 	assert.Empty(t, stdout.String())
 	assert.NotEmpty(t, stderr.String())
 }
 
 func TestFormatLine(t *testing.T) {
-	got := formatLine("https://x.io", probe.Result{
+	got := formatLine(probe.Result{
+		Target:     "https://x.io",
 		Outcome:    probe.Up,
 		StatusCode: http.StatusOK,
 		Latency:    42 * time.Millisecond,
